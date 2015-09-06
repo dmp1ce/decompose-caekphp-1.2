@@ -1,8 +1,13 @@
 # Development environment setting ('development' or 'production')
 PROJECT_ENVIRONMENT="development"
 
-# Docker machine production server
-PROJECT_PRODUCTION_SERVER="dev"
+# Production server settings
+PROJECT_PRODUCTION_SERVER_IP=""
+PROJECT_PRODUCTION_SERVER_USER=""
+PROJECT_PRODUCTION_SERVER_BASE_PATH=""
+
+# Were to write current version information to
+PROJECT_VERSION_FILE="version.txt"
 
 # Virtual host settings
 PROJECT_NGINX_VIRTUAL_HOST_DEV="mysite.local"

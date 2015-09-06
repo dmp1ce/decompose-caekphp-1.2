@@ -1,7 +1,8 @@
 DECOMPOSE_PROCESSES=( 'env' 'explore' 'dc' 'build' 'up' 'start_nginx_proxy'
-  'stop_nginx_proxy' 'update-to-latest'
+  'stop_nginx_proxy' 'increment-tag'
   'generate_self_signed_certs' 'import_db' 'explore_db' 'import_uploads'
-  'import_cache' 'project-root' 'backup_config' )
+  'import_cache' 'project-root' 'backup_config'
+  'update-production-server-to-latest' )
 
 _decompose-process-env() {
   echo "$PROJECT_ENVIRONMENT"
@@ -39,29 +40,17 @@ _decompose-process-dc_help() {
 }
 
 _decompose-process-build() {
-  # TODO: Generate SSL certificates if they don't already exist.
-  #echo 'TODO: Generate SSL certs for testing'
-  # TODO: Rebuild source for production
-  # TODO: Build remaining docker-compose containers
-
+  # Build all the decompose templates
   decompose-process-templates 
 
   # Get current base version
   local project_root; _decompose-project-root project_root
-  local git_base_revision="`git rev-parse HEAD 2>&1`"
+  local git_base_revision="`git describe --tags --match=v* --always --dirty 2>&1`"
   local git_base_status="`git status -unormal 2>&1`"
-  local git_base_clean_state="unknown"
-  if ! [[ "$git_base_status" =~ Not\ a\ git\ repo ]]; then
-    if [[ "$git_base_status" =~ nothing\ to\ commit ]]; then
-      local git_base_clean_state="clean"
-    else
-      local git_base_clean_state="dirty"
-    fi
-  fi
 
   # Set current base version
-  echo -e "$PROJECT_ENVIRONMENT\n$git_base_revision-$git_base_clean_state\n" > \
-    "$project_root"/containers/source/source/httpdocs/app/webroot/version.txt
+  echo -e "$PROJECT_ENVIRONMENT\n$git_base_revision" > \
+    "$project_root"/"$PROJECT_VERSION_FILE"
 
   docker-compose build
 }
@@ -76,21 +65,74 @@ _decompose-process-up_help() {
   echo "  Start project locally"
 }
 
-_decompose-process-update-to-latest() {
-  # Get latest from git
-  if [ "$PROJECT_ENVIRONMENT" == "production" ]; then
-    git checkout production
-  else
-    git checkout master
-  fi
-  git pull --recurse-submodules
+_decompose-process-increment-tag() {
+  # Verify that there are no version tags on at HEAD
+  # so we don't create more tags than we need
+  local head_version_tag=$(git describe --tags --candidates=0 --match=v* 2> /dev/null)
 
-  _decompose-process-build
-  _decompose-process-up
+  if [ $head_version_tag ]; then
+    echo "The version '$head_version_tag' already exists for HEAD"
+    return 1
+  fi
+
+  # Increment tag
+  local newtag=$(git describe --abbrev=0 --tags --match=v* | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{if(length($NF+1)>length($NF))$(NF-1)++; $NF=sprintf("%0*d", length($NF), ($NF+1)%(10^length($NF))); print}')
+
+  git tag "$newtag"
+}
+_decompose-process-increment-tag_help() {
+  echo "  Increments the last tag and creates a new tag in git"
 }
 
-_decompose-process-update-to-latest_help() {
-  echo "  Update source from git, build and redeploy containers"
+__decompose-process-update-production-repo() {
+    __decompose-process-ssh-command "git pull --recurse-submodules"
+}
+
+# Parameters
+#   $1: command
+__decompose-process-ssh-command() {
+  ssh $PROJECT_PRODUCTION_SERVER_USER@$PROJECT_PRODUCTION_SERVER_IP \
+    "cd $PROJECT_PRODUCTION_SERVER_BASE_PATH && $1"
+}
+
+_decompose-process-update-production-server-to-latest() {
+  # Test that user can update production git repository successfully
+  echo "Testing user access to prodcution server..."
+  __decompose-process-update-production-repo || local fetch_failed=1
+  if [ $fetch_failed ]; then
+    echo "Access test failed!"
+    echo "Check your SSH access to the production server and source control."
+    exit 1
+  else
+    echo "Access test passed."
+  fi
+
+  # increment the last tag
+  echo "Incrementing version tag..."
+  _decompose-process-increment-tag
+
+  # push production to source control server
+  echo "Pushing local changes to source control server..."
+  git push && git push --tags
+
+  # update decompose environment on server
+  echo "Update decompose evironment on production server..."
+  __decompose-process-ssh-command "decompose --update"
+
+  # run ssh command to update server
+  echo "Rebuilding production environment..."
+  __decompose-process-ssh-command "decompose build && decompose up"
+
+  echo "Done."
+}
+_decompose-process-update-production-server-to-latest_help() {
+  echo "  Update production to the latest code with the folloing steps:"
+  echo "  -------------------------------------------------------------"
+  echo "  1. Test connection to server"
+  echo "  2. Create new tag, incremented from the last tag"
+  echo "  3. Push latest code and tags"
+  echo "  4. Update code on production site"
+  echo "  5. Rebuild/recreate production containers"
 }
 
 _decompose-process-start_nginx_proxy() {
