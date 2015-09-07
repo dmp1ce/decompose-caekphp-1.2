@@ -77,7 +77,11 @@ _decompose-process-build_help() {
 }
 
 _decompose-process-up() {
-  docker-compose up -d --force-recreate
+  if [[ $PRODUCTION ]]; then
+    docker-compose up -d --force-recreate
+  else
+    docker-compose up -d
+  fi
 }
 _decompose-process-up_help() {
   echo "  Start project locally"
